@@ -1,0 +1,3 @@
+kahip.C
+
+LIB = $(FOAM_SITE_LIBBIN)/libkahipDecomp_aalto

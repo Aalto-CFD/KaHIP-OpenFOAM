@@ -1,0 +1,19 @@
+-include $(GENERAL_RULES)/mplibType
+
+KAHIP_ARCH_PATH ?= /l/opt/KaHIP
+
+# The deploy/ tree only ships a static ParHIP archive without its
+# dependencies; the shared lib built by CMake is self-contained, so use it
+# straight from the build tree.
+PARHIP_LIB_DIR ?= $(KAHIP_ARCH_PATH)/build/parallel/parallel_src
+
+EXE_INC = \
+    $(PFLAGS) $(PINC) \
+    -I$(FOAM_SRC)/Pstream/mpi/lnInclude \
+    -I$(KAHIP_ARCH_PATH)/deploy \
+    -I$(LIB_SRC)/parallel/decompose/decompositionMethods/lnInclude
+
+LIB_LIBS = \
+    -L$(PARHIP_LIB_DIR) \
+    -Wl,-rpath,$(PARHIP_LIB_DIR) \
+    -lparhip_interface
