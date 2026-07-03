@@ -72,6 +72,31 @@ Foam::label Foam::decompositionMethods::kahip::decompose
     labelList& decomp
 )
 {
+    // A distributor redistributes the existing mesh across the running
+    // processors, so the number of subdomains must equal the number of MPI
+    // ranks. Guarding here also keeps every partition index ParHIP returns
+    // within [0, nProcs), which the per-processor addressing below indexes.
+    if (nProcessors_ != Pstream::nProcs())
+    {
+        FatalErrorInFunction
+            << "The kahip distributor redistributes onto the running "
+            << Pstream::nProcs() << " processors, but numberOfSubdomains is "
+            << nProcessors_ << "." << nl
+            << "Set numberOfSubdomains equal to the number of processors."
+            << exit(FatalError);
+    }
+
+    // Cell weights, if any, must provide exactly one weight per cell
+    if (cellWeights.size() && cellWeights.size() != cellCentres.size())
+    {
+        FatalErrorInFunction
+            << "Number of cell weights " << cellWeights.size()
+            << " does not equal number of cells " << cellCentres.size()
+            << "." << nl
+            << "The kahip distributor supports a single weight per cell only."
+            << exit(FatalError);
+    }
+
     // ParHIP preconfiguration mode
     word mode("fastMesh");
     methodDict_.readIfPresent("mode", mode);
@@ -120,104 +145,126 @@ Foam::label Foam::decompositionMethods::kahip::decompose
     const Switch verbose(methodDict_.lookupOrDefault<Switch>("verbose", false));
     const bool suppressOutput = !verbose;
 
-    if (!methodDict_.empty())
-    {
-        Info<< "kahip : Using ParHIP mode       " << mode << nl
-            << "        Allowed imbalance       " << imbalance << nl
-            << "        Random seed             " << seed << nl << endl;
-    }
+    Info<< "kahip : Using ParHIP mode       " << mode << nl
+        << "        Allowed imbalance       " << imbalance << nl
+        << "        Random seed             " << seed << nl << endl;
 
-    // vtxdist: global cell offset per processor (size nProcs+1), the same
-    // distributed-CSR convention as ParMETIS
-    globalIndex globalMap(cellCentres.size());
-    const labelList& offsets = globalMap.offsets();
-
-    List<idxtype> vtxdist(offsets.size());
-    forAll(offsets, i)
-    {
-        vtxdist[i] = idxtype(offsets[i]);
-    }
-
-    // ParHIP's graph arrays use a fixed 64-bit idxtype, distinct from the
-    // 32-bit OpenFOAM label, so they must be converted rather than aliased.
-    List<idxtype> xadjIdx(xadj.size());
-    forAll(xadj, i)
-    {
-        xadjIdx[i] = idxtype(xadj[i]);
-    }
-
-    List<idxtype> adjncyIdx(adjncy.size());
-    forAll(adjncy, i)
-    {
-        adjncyIdx[i] = idxtype(adjncy[i]);
-    }
-
-    // Cell weights (so on the vertices of the graph). The graph is
-    // distributed across processors, so the weights must be scaled using
-    // the global (not per-processor local) sum.
+    // Cell weights on the graph vertices. scaleWeights performs a global
+    // (collective) reduction to scale by the total weight, so it must run on
+    // every processor, before any communicator sub-setting below.
     label nWeights = 1;
     const labelList intWeights(scaleWeights(cellWeights, nWeights, true));
 
-    List<idxtype> vwgt;
-    if (intWeights.size())
+    // Are vertex weights in use on any processor? (collective)
+    const bool useWeights =
+        returnReduce(cellWeights.size(), sumOp<label>()) > 0;
+
+    // Distributed-CSR vertex distribution: the global cell offset per
+    // processor. globalIndex construction is an all-gather, so on all ranks.
+    globalIndex globalMap(cellCentres.size());
+    const labelList& cellOffsets = globalMap.offsets();
+
+    // Restrict ParHIP to the processors that actually own cells. ParHIP runs
+    // MPI collectives internally (e.g. the vwgt all-reduce) and computes its
+    // vertex range with unsigned arithmetic, so a processor with zero cells
+    // would both diverge from the collectives the populated ranks make (a
+    // hang) and underflow that range. Build vtxdist over the valid processors
+    // only; empty processors contribute no cells and so do not shift offsets.
+    labelList validProcs(Pstream::nProcs());
+    List<idxtype> vtxdist(Pstream::nProcs() + 1);
+    label nValidProcs = 0;
+    for (label proci = 0; proci < Pstream::nProcs(); proci++)
     {
-        vwgt.setSize(intWeights.size());
-        forAll(intWeights, i)
+        if (cellOffsets[proci + 1] - cellOffsets[proci] > 0)
         {
-            vwgt[i] = idxtype(intWeights[i]);
+            validProcs[nValidProcs] = proci;
+            vtxdist[nValidProcs] = idxtype(cellOffsets[proci]);
+            nValidProcs++;
         }
     }
+    validProcs.setSize(nValidProcs);
+    vtxdist[nValidProcs] = idxtype(cellOffsets[Pstream::nProcs()]);
+    vtxdist.setSize(nValidProcs + 1);
 
-    int nParts = nProcessors_;
-
-    // Output: number of cut edges
-    int edgeCut = 0;
+    // Communicator over the cell-owning processors only. Allocating a fresh
+    // communicator (even when every processor owns cells) also isolates
+    // ParHIP's raw MPI_ANY_SOURCE ghost-node exchange from OpenFOAM's own
+    // Pstream traffic, which would otherwise silently corrupt the partition.
+    const label commi =
+        Pstream::allocateCommunicator(UPstream::worldComm, validProcs);
 
     // Output: cell -> processor addressing
     List<idxtype> part(cellCentres.size(), idxtype(0));
 
-    // Give ParHIP its own communicator, duplicated from OpenFOAM's. ParHIP
-    // uses raw MPI_ANY_SOURCE point-to-point calls internally for its
-    // ghost-node exchange; sharing OpenFOAM's own communicator risks its
-    // messages being intercepted by unrelated pending Pstream traffic on
-    // the same tags, which silently corrupts the result rather than
-    // crashing.
-    MPI_Comm comm;
-    MPI_Comm_dup(PstreamGlobals::MPI_COMM_FOAM, &comm);
+    // Output: number of cut edges
+    int edgeCut = 0;
 
-    // Switch off FPU error trapping to work around a divide-by-zero in
-    // ParHIP's recursive initial partitioning (same issue as Zoltan's)
-    #ifdef FE_NOMASK_ENV
-    int oldExcepts = fedisableexcept
-    (
-        FE_DIVBYZERO
-      | FE_INVALID
-      | FE_OVERFLOW
-    );
-    #endif
+    if (cellCentres.size())
+    {
+        // Convert the CSR graph to ParHIP's fixed 64-bit idxtype, which
+        // differs from the 32-bit OpenFOAM label and so cannot be aliased.
+        List<idxtype> xadjIdx(xadj.size());
+        forAll(xadj, i)
+        {
+            xadjIdx[i] = idxtype(xadj[i]);
+        }
 
-    ParHIPPartitionKWay
-    (
-        vtxdist.begin(),
-        xadjIdx.begin(),
-        adjncyIdx.begin(),
-        vwgt.size() ? vwgt.begin() : nullptr,  // vwgt
-        nullptr,                               // adjwgt: edge weights
-        &nParts,
-        &imbalance,
-        suppressOutput,
-        seed,
-        kahipMode,
-        &edgeCut,
-        part.begin(),
-        &comm
-    );
+        List<idxtype> adjncyIdx(adjncy.size());
+        forAll(adjncy, i)
+        {
+            adjncyIdx[i] = idxtype(adjncy[i]);
+        }
 
-    #ifdef FE_NOMASK_ENV
-    feenableexcept(oldExcepts);
-    #endif
+        // Vertex weights. Pass a value on every participating processor so
+        // ParHIP takes the vwgt!=NULL branch (and its collective) on all of
+        // them; fall back to uniform weights where none were supplied.
+        List<idxtype> vwgt;
+        if (useWeights)
+        {
+            vwgt.setSize(cellCentres.size(), idxtype(1));
+            forAll(intWeights, i)
+            {
+                vwgt[i] = idxtype(intWeights[i]);
+            }
+        }
 
-    MPI_Comm_free(&comm);
+        int nParts = nProcessors_;
+        MPI_Comm comm = PstreamGlobals::MPICommunicators_[commi];
+
+        // Switch off FPU error trapping to work around a divide-by-zero in
+        // ParHIP's recursive initial partitioning (same issue as Zoltan's)
+        #ifdef FE_NOMASK_ENV
+        int oldExcepts = fedisableexcept
+        (
+            FE_DIVBYZERO
+          | FE_INVALID
+          | FE_OVERFLOW
+        );
+        #endif
+
+        ParHIPPartitionKWay
+        (
+            vtxdist.begin(),
+            xadjIdx.begin(),
+            adjncyIdx.begin(),
+            useWeights ? vwgt.begin() : nullptr,   // vwgt
+            nullptr,                               // adjwgt: edge weights
+            &nParts,
+            &imbalance,
+            suppressOutput,
+            seed,
+            kahipMode,
+            &edgeCut,
+            part.begin(),
+            &comm
+        );
+
+        #ifdef FE_NOMASK_ENV
+        feenableexcept(oldExcepts);
+        #endif
+    }
+
+    Pstream::freeCommunicator(commi);
 
     decomp.setSize(part.size());
     forAll(part, i)
