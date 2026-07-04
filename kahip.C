@@ -23,6 +23,18 @@ License
 
 \*---------------------------------------------------------------------------*/
 
+// Both PstreamGlobals.H and parhip_interface.h pull in mpi.h. Prevent it from
+// also dragging in the deprecated MPI C++ bindings, which fail to compile on
+// some MPI stacks. The OpenFOAM MPI build rules normally define these already;
+// setting them here too keeps the file safe to compile in isolation. Must
+// precede any include that reaches mpi.h.
+#ifndef MPICH_SKIP_MPICXX
+#define MPICH_SKIP_MPICXX
+#endif
+#ifndef OMPI_SKIP_MPICXX
+#define OMPI_SKIP_MPICXX
+#endif
+
 #include "kahip.H"
 #include "Switch.H"
 #include "globalIndex.H"

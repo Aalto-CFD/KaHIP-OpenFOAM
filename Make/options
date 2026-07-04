@@ -1,5 +1,6 @@
 -include $(GENERAL_RULES)/mplibType
 
+# KaHIP install prefix; override in etc/*.env for other clusters.
 KAHIP_ARCH_PATH ?= /l/opt/KaHIP
 
 EXE_INC = \
@@ -8,6 +9,11 @@ EXE_INC = \
     -I$(KAHIP_ARCH_PATH)/deploy \
     -I$(LIB_SRC)/parallel/decompose/decompositionMethods/lnInclude
 
+# Link the parallel KaHIP (ParHIP) interface, not the serial libkahip. The
+# shared library in deploy/ is self-contained: it bundles KaHIP and its OpenMP
+# dependency, so - unlike a static libkahip.a/libparhip.a - it needs no
+# explicit $(LINK_OPENMP). The rpath lets loaded cases resolve it without
+# KaHIP being on LD_LIBRARY_PATH.
 LIB_LIBS = \
     -L$(KAHIP_ARCH_PATH)/deploy \
     -Wl,-rpath,$(KAHIP_ARCH_PATH)/deploy \
