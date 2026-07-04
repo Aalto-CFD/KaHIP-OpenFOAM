@@ -147,8 +147,14 @@ Foam::label Foam::decompositionMethods::kahip::decompose
             << exit(FatalIOError);
     }
 
-    // Allowed imbalance between the resulting subdomains (fraction)
-    double imbalance = methodDict_.lookupOrDefault<scalar>("imbalance", 0.03);
+    // Imbalance tolerance (fraction, as ParHIP expects)
+    double imbalance = 0.02;
+
+    // If only one processor there is no imbalance
+    if (nProcessors_ == 1)
+    {
+        imbalance = 0;
+    }
 
     // Random seed
     int seed = methodDict_.lookupOrDefault<label>("seed", 0);
@@ -158,7 +164,6 @@ Foam::label Foam::decompositionMethods::kahip::decompose
     const bool suppressOutput = !verbose;
 
     Info<< "kahip : Using ParHIP method     " << method << nl
-        << "        Allowed imbalance       " << imbalance << nl
         << "        Random seed             " << seed << nl << endl;
 
     // Cell weights on the graph vertices. scaleWeights performs a global

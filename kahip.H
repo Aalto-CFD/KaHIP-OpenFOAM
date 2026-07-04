@@ -39,9 +39,10 @@ Description
         graphs
       Default: fast
 
-    - imbalance : allowed imbalance fraction. Default: 0.03
-
     - seed : random seed. Default: 0
+
+    The imbalance tolerance is fixed at 0.02 (0 for a single domain), as in
+    the parMetis distributor.
 
 Usage
     To select the KaHIP (ParHIP) distributor add the following entries to
@@ -50,13 +51,11 @@ Usage
         distributor     kahip;
         libs            ("libkahipDecomp_aalto.so");
 
-    The method/imbalance/seed can be changed via the optional kahip
-    sub-dictionary, e.g.:
+    The method/seed can be changed via the optional kahip sub-dictionary, e.g.:
 
         kahip
         {
             method      fast;
-            imbalance   0.03;
         }
 
 SourceFiles
