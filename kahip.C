@@ -109,40 +109,40 @@ Foam::label Foam::decompositionMethods::kahip::decompose
             << exit(FatalError);
     }
 
-    // ParHIP preconfiguration mode
-    word mode("fastMesh");
-    methodDict_.readIfPresent("mode", mode);
+    // ParHIP preconfiguration method
+    word method("fast");
+    methodDict_.readIfPresent("method", method);
 
     int kahipMode = FASTMESH;
-    if (mode == "ultrafastMesh")
+    if (method == "ultrafast")
     {
         kahipMode = ULTRAFASTMESH;
     }
-    else if (mode == "fastMesh")
+    else if (method == "fast")
     {
         kahipMode = FASTMESH;
     }
-    else if (mode == "ecoMesh")
+    else if (method == "eco")
     {
         kahipMode = ECOMESH;
     }
-    else if (mode == "ultrafastSocial")
+    else if (method == "ultrafastSocial")
     {
         kahipMode = ULTRAFASTSOCIAL;
     }
-    else if (mode == "fastSocial")
+    else if (method == "fastSocial")
     {
         kahipMode = FASTSOCIAL;
     }
-    else if (mode == "ecoSocial")
+    else if (method == "ecoSocial")
     {
         kahipMode = ECOSOCIAL;
     }
     else
     {
         FatalIOErrorInFunction(methodDict_)
-            << "Unknown KaHIP mode " << mode << nl
-            << "Valid modes are: ultrafastMesh, fastMesh, ecoMesh, "
+            << "Unknown KaHIP method " << method << nl
+            << "Valid methods are: ultrafast, fast, eco, "
             << "ultrafastSocial, fastSocial, ecoSocial"
             << exit(FatalIOError);
     }
@@ -157,7 +157,7 @@ Foam::label Foam::decompositionMethods::kahip::decompose
     const Switch verbose(methodDict_.lookupOrDefault<Switch>("verbose", false));
     const bool suppressOutput = !verbose;
 
-    Info<< "kahip : Using ParHIP mode       " << mode << nl
+    Info<< "kahip : Using ParHIP method     " << method << nl
         << "        Allowed imbalance       " << imbalance << nl
         << "        Random seed             " << seed << nl << endl;
 

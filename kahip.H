@@ -33,11 +33,11 @@ Description
     Use a built-in method (e.g. 'simple') for the initial decomposer.
 
     Parameters
-    - mode : The KaHIP mesh-partitioning preconfiguration
-      - ultrafastMesh, fastMesh, ecoMesh : for mesh-like graphs
+    - method : The KaHIP preconfiguration
+      - ultrafast, fast, eco : for mesh-like graphs
       - ultrafastSocial, fastSocial, ecoSocial : for social-network-like
         graphs
-      Default: fastMesh
+      Default: fast
 
     - imbalance : allowed imbalance fraction. Default: 0.03
 
@@ -50,12 +50,12 @@ Usage
         distributor     kahip;
         libs            ("libkahipDecomp_aalto.so");
 
-    The mode/imbalance/seed can be changed via the optional kahip
+    The method/imbalance/seed can be changed via the optional kahip
     sub-dictionary, e.g.:
 
         kahip
         {
-            mode        fastMesh;
+            method      fast;
             imbalance   0.03;
         }
 
