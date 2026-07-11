@@ -23,11 +23,7 @@ License
 
 \*---------------------------------------------------------------------------*/
 
-// Both PstreamGlobals.H and parhip_interface.h pull in mpi.h. Prevent it from
-// also dragging in the deprecated MPI C++ bindings, which fail to compile on
-// some MPI stacks. The OpenFOAM MPI build rules normally define these already;
-// setting them here too keeps the file safe to compile in isolation. Must
-// precede any include that reaches mpi.h.
+// Skip the deprecated MPI C++ bindings; must precede any mpi.h include
 #ifndef MPICH_SKIP_MPICXX
 #define MPICH_SKIP_MPICXX
 #endif
@@ -72,6 +68,32 @@ namespace decompositionMethods
 }
 }
 
+const Foam::NamedEnum<Foam::decompositionMethods::kahip::kahipMethod, 6>
+Foam::decompositionMethods::kahip::kahipMethodNames_
+{
+    "ultrafast",
+    "fast",
+    "eco",
+    "ultrafastSocial",
+    "fastSocial",
+    "ecoSocial"
+};
+
+namespace
+{
+    // The ParHIP preconfiguration constant for each kahipMethod, in
+    // kahipMethodNames_ order
+    const int kahipModes[] =
+    {
+        ULTRAFASTMESH,
+        FASTMESH,
+        ECOMESH,
+        ULTRAFASTSOCIAL,
+        FASTSOCIAL,
+        ECOSOCIAL
+    };
+}
+
 
 // * * * * * * * * * * * * * Private Member Functions  * * * * * * * * * * * //
 
@@ -79,15 +101,12 @@ Foam::label Foam::decompositionMethods::kahip::decompose
 (
     const labelList& xadj,
     const labelList& adjncy,
-    const pointField& cellCentres,
+    const label nCells,
     const scalarField& cellWeights,
     labelList& decomp
 )
 {
-    // A distributor redistributes the existing mesh across the running
-    // processors, so the number of subdomains must equal the number of MPI
-    // ranks. Guarding here also keeps every partition index ParHIP returns
-    // within [0, nProcs), which the per-processor addressing below indexes.
+    // A distributor redistributes onto the running processors only
     if (nProcessors_ != Pstream::nProcs())
     {
         FatalErrorInFunction
@@ -96,55 +115,6 @@ Foam::label Foam::decompositionMethods::kahip::decompose
             << nProcessors_ << "." << nl
             << "Set numberOfSubdomains equal to the number of processors."
             << exit(FatalError);
-    }
-
-    // Cell weights, if any, must provide exactly one weight per cell
-    if (cellWeights.size() && cellWeights.size() != cellCentres.size())
-    {
-        FatalErrorInFunction
-            << "Number of cell weights " << cellWeights.size()
-            << " does not equal number of cells " << cellCentres.size()
-            << "." << nl
-            << "The kahip distributor supports a single weight per cell only."
-            << exit(FatalError);
-    }
-
-    // ParHIP preconfiguration method
-    word method("fast");
-    methodDict_.readIfPresent("method", method);
-
-    int kahipMode = FASTMESH;
-    if (method == "ultrafast")
-    {
-        kahipMode = ULTRAFASTMESH;
-    }
-    else if (method == "fast")
-    {
-        kahipMode = FASTMESH;
-    }
-    else if (method == "eco")
-    {
-        kahipMode = ECOMESH;
-    }
-    else if (method == "ultrafastSocial")
-    {
-        kahipMode = ULTRAFASTSOCIAL;
-    }
-    else if (method == "fastSocial")
-    {
-        kahipMode = FASTSOCIAL;
-    }
-    else if (method == "ecoSocial")
-    {
-        kahipMode = ECOSOCIAL;
-    }
-    else
-    {
-        FatalIOErrorInFunction(methodDict_)
-            << "Unknown KaHIP method " << method << nl
-            << "Valid methods are: ultrafast, fast, eco, "
-            << "ultrafastSocial, fastSocial, ecoSocial"
-            << exit(FatalIOError);
     }
 
     // Imbalance tolerance (fraction, as ParHIP expects)
@@ -156,37 +126,68 @@ Foam::label Foam::decompositionMethods::kahip::decompose
         imbalance = 0;
     }
 
-    // Random seed
-    int seed = methodDict_.lookupOrDefault<label>("seed", 0);
-
-    // Verbosity of the ParHIP library itself
-    const Switch verbose(methodDict_.lookupOrDefault<Switch>("verbose", false));
-    const bool suppressOutput = !verbose;
-
-    Info<< "kahip : Using ParHIP method     " << method << nl
-        << "        Random seed             " << seed << nl << endl;
-
-    // Cell weights on the graph vertices. scaleWeights performs a global
-    // (collective) reduction to scale by the total weight, so it must run on
-    // every processor, before any communicator sub-setting below.
-    label nWeights = 1;
-    const labelList intWeights(scaleWeights(cellWeights, nWeights, true));
-
     // Are vertex weights in use on any processor? (collective)
     const bool useWeights =
         returnReduce(cellWeights.size(), sumOp<label>()) > 0;
 
-    // Distributed-CSR vertex distribution: the global cell offset per
-    // processor. globalIndex construction is an all-gather, so on all ranks.
-    globalIndex globalMap(cellCentres.size());
+    // Cell weights on the graph vertices; multiple weights per cell are
+    // combined by summation as ParHIP supports a single weight only
+    labelList intWeights;
+    if (useWeights)
+    {
+        const label nWeights = nCells ? cellWeights.size()/nCells : 0;
+
+        if (nCells && nWeights*nCells != cellWeights.size())
+        {
+            FatalErrorInFunction
+                << "Number of cell weights " << cellWeights.size()
+                << " is not a multiple of the number of cells " << nCells
+                << exit(FatalError);
+        }
+
+        const label nGlobalWeights = returnReduce(nWeights, maxOp<label>());
+
+        if (nCells && nWeights != nGlobalWeights)
+        {
+            FatalErrorInFunction
+                << "Number of weights per cell " << nWeights
+                << " differs between processors (max " << nGlobalWeights
+                << ")" << exit(FatalError);
+        }
+
+        if (nGlobalWeights > 1)
+        {
+            Info<< "kahip : Combining " << nGlobalWeights
+                << " weights per cell into one" << endl;
+        }
+
+        scalarField combinedWeights;
+        if (nWeights > 1)
+        {
+            combinedWeights.setSize(nCells, 0);
+            forAll(combinedWeights, i)
+            {
+                for (label wi = 0; wi < nWeights; wi++)
+                {
+                    combinedWeights[i] += cellWeights[nWeights*i + wi];
+                }
+            }
+        }
+
+        label nScaleWeights = 1;
+        intWeights = scaleWeights
+        (
+            nWeights > 1 ? combinedWeights : cellWeights,
+            nScaleWeights,
+            true
+        );
+    }
+
+    // Global cell offset per processor
+    globalIndex globalMap(nCells);
     const labelList& cellOffsets = globalMap.offsets();
 
-    // Restrict ParHIP to the processors that actually own cells. ParHIP runs
-    // MPI collectives internally (e.g. the vwgt all-reduce) and computes its
-    // vertex range with unsigned arithmetic, so a processor with zero cells
-    // would both diverge from the collectives the populated ranks make (a
-    // hang) and underflow that range. Build vtxdist over the valid processors
-    // only; empty processors contribute no cells and so do not shift offsets.
+    // Build the vertex distribution over the cell-owning processors only
     labelList validProcs(Pstream::nProcs());
     List<idxtype> vtxdist(Pstream::nProcs() + 1);
     label nValidProcs = 0;
@@ -203,42 +204,27 @@ Foam::label Foam::decompositionMethods::kahip::decompose
     vtxdist[nValidProcs] = idxtype(cellOffsets[Pstream::nProcs()]);
     vtxdist.setSize(nValidProcs + 1);
 
-    // Communicator over the cell-owning processors only. Allocating a fresh
-    // communicator (even when every processor owns cells) also isolates
-    // ParHIP's raw MPI_ANY_SOURCE ghost-node exchange from OpenFOAM's own
-    // Pstream traffic, which would otherwise silently corrupt the partition.
+    // Fresh communicator over the cell-owning processors only
     const label commi =
         Pstream::allocateCommunicator(UPstream::worldComm, validProcs);
 
     // Output: cell -> processor addressing
-    List<idxtype> part(cellCentres.size(), idxtype(0));
+    List<idxtype> part(nCells, idxtype(0));
 
     // Output: number of cut edges
     int edgeCut = 0;
 
-    if (cellCentres.size())
+    if (nCells)
     {
-        // Convert the CSR graph to ParHIP's fixed 64-bit idxtype, which
-        // differs from the 32-bit OpenFOAM label and so cannot be aliased.
-        List<idxtype> xadjIdx(xadj.size());
-        forAll(xadj, i)
-        {
-            xadjIdx[i] = idxtype(xadj[i]);
-        }
+        // Convert the CSR graph to ParHIP's 64-bit idxtype
+        List<idxtype> xadjIndex(xadj);
+        List<idxtype> adjncyIndex(adjncy);
 
-        List<idxtype> adjncyIdx(adjncy.size());
-        forAll(adjncy, i)
-        {
-            adjncyIdx[i] = idxtype(adjncy[i]);
-        }
-
-        // Vertex weights. Pass a value on every participating processor so
-        // ParHIP takes the vwgt!=NULL branch (and its collective) on all of
-        // them; fall back to uniform weights where none were supplied.
+        // Vertex weights; uniform where none were supplied
         List<idxtype> vwgt;
         if (useWeights)
         {
-            vwgt.setSize(cellCentres.size(), idxtype(1));
+            vwgt.setSize(nCells, idxtype(1));
             forAll(intWeights, i)
             {
                 vwgt[i] = idxtype(intWeights[i]);
@@ -262,15 +248,15 @@ Foam::label Foam::decompositionMethods::kahip::decompose
         ParHIPPartitionKWay
         (
             vtxdist.begin(),
-            xadjIdx.begin(),
-            adjncyIdx.begin(),
+            xadjIndex.begin(),
+            adjncyIndex.begin(),
             useWeights ? vwgt.begin() : nullptr,   // vwgt
             nullptr,                               // adjwgt: edge weights
             &nParts,
             &imbalance,
-            suppressOutput,
-            seed,
-            kahipMode,
+            suppressOutput_,
+            seed_,
+            kahipModes[unsigned(method_)],
             &edgeCut,
             part.begin(),
             &comm
@@ -322,8 +308,29 @@ Foam::decompositionMethods::kahip::kahip
 )
 :
     decompositionMethod(decompositionDict),
-    methodDict_(methodDict)
-{}
+    method_
+    (
+        kahipMethodNames_.lookupOrDefault
+        (
+            "method",
+            methodDict,
+            kahipMethod::fast
+        )
+    ),
+    seed_(methodDict.lookupOrDefault<label>("seed", 0)),
+    suppressOutput_(!methodDict.lookupOrDefault<Switch>("verbose", false))
+{
+    // ParHIP has no equivalent of parMetis's processorWeights
+    if (methodDict.found("processorWeights"))
+    {
+        FatalIOErrorInFunction(methodDict)
+            << "The kahip distributor does not support processorWeights"
+            << exit(FatalIOError);
+    }
+
+    Info<< indent << "Using ParHIP method " << kahipMethodNames_[method_]
+        << ", random seed " << seed_ << endl;
+}
 
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
@@ -364,7 +371,7 @@ Foam::labelList Foam::decompositionMethods::kahip::decompose
     (
         cellCells.offsets(),
         cellCells.m(),
-        points,
+        points.size(),
         pointWeights,
         decomp
     );
@@ -400,7 +407,7 @@ Foam::labelList Foam::decompositionMethods::kahip::decompose
     (
         cellCells.offsets(),
         cellCells.m(),
-        regionPoints,
+        regionPoints.size(),
         regionWeights,
         decomp
     );
@@ -442,7 +449,7 @@ Foam::labelList Foam::decompositionMethods::kahip::decompose
     (
         cellCells.offsets(),
         cellCells.m(),
-        cellCentres,
+        cellCentres.size(),
         cellWeights,
         decomp
     );

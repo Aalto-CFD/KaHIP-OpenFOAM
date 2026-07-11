@@ -41,8 +41,17 @@ Description
 
     - seed : random seed. Default: 0
 
+    - verbose : enable output from the ParHIP library itself. Default: no
+
     The imbalance tolerance is fixed at 0.02 (0 for a single domain), as in
     the parMetis distributor.
+
+    ParHIP supports a single weight (constraint) per cell only. If a caller
+    supplies multiple weights per cell (e.g. the loadBalancer distributor
+    with multiConstraint enabled) they are combined by summation into a
+    single weight, equivalent to the loadBalancer's own single-constraint
+    handling. parMetis's processorWeights option is not supported and is
+    rejected if present.
 
 Usage
     To select the KaHIP (ParHIP) distributor add the following entries to
@@ -67,6 +76,7 @@ SourceFiles
 #define kahip_H
 
 #include "decompositionMethod.H"
+#include "NamedEnum.H"
 
 namespace Foam
 {
@@ -81,17 +91,48 @@ class kahip
 :
     public decompositionMethod
 {
-    dictionary methodDict_;
+public:
+
+    // Public Enumerations
+
+        //- ParHIP preconfiguration methods
+        enum class kahipMethod
+        {
+            ultrafast,
+            fast,
+            eco,
+            ultrafastSocial,
+            fastSocial,
+            ecoSocial
+        };
+
+        //- ParHIP preconfiguration method names
+        static const NamedEnum<kahipMethod, 6> kahipMethodNames_;
+
+
+private:
+
+    // Private Data
+
+        //- ParHIP preconfiguration method
+        const kahipMethod method_;
+
+        //- Random seed
+        const int seed_;
+
+        //- Suppress output from the ParHIP library itself
+        const bool suppressOutput_;
+
 
     // Private Member Functions
 
-        //- Call ParHIP with options from dictionary. Operates on the
-        //  distributed graph, already split across processors.
+        //- Call ParHIP with the options held by this method. Operates on
+        //  the distributed graph, already split across processors.
         label decompose
         (
             const labelList& xadj,
             const labelList& adjncy,
-            const pointField& cellCentres,
+            const label nCells,
             const scalarField& cellWeights,
             labelList& finalDecomp
         );
