@@ -1,19 +1,12 @@
 -include $(GENERAL_RULES)/mplibType
 
-# KaHIP install prefix; override in etc/*.env for other clusters
-ifeq ($(strip $(KAHIP_ARCH_PATH)),)
-    KAHIP_ARCH_PATH = /l/opt/KaHIP
-endif
-
 EXE_INC = \
     $(PFLAGS) $(PINC) \
     -I$(FOAM_SRC)/Pstream/mpi/lnInclude \
-    -I$(KAHIP_ARCH_PATH)/deploy \
+    $(if $(KAHIP_INCLUDE_DIR),-I$(KAHIP_INCLUDE_DIR)) \
     -I$(LIB_SRC)/parallel/decompose/decompositionMethods/lnInclude
 
-# Link the parallel KaHIP (ParHIP) interface, not the serial libkahip
 LIB_LIBS = \
     -ldecompositionMethods \
-    -L$(KAHIP_ARCH_PATH)/deploy \
-    -Wl,-rpath,$(KAHIP_ARCH_PATH)/deploy \
+    $(if $(KAHIP_LIB_DIR),-L$(KAHIP_LIB_DIR)) \
     -lparhip_interface

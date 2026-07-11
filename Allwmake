@@ -4,19 +4,16 @@ cd ${0%/*} || exit 1    # Run from this directory
 # Parse arguments for library compilation
 . $WM_PROJECT_DIR/wmake/scripts/AllwmakeParseArguments
 
-# Location of the KaHIP installation (override in etc/*.env per cluster)
-: ${KAHIP_ARCH_PATH:=/l/opt/KaHIP}
-export KAHIP_ARCH_PATH
-
-# Build only where the ParHIP interface is available, so that a site-wide
-# `wmake -all` does not fail on machines without KaHIP installed.
-if [ -f "$KAHIP_ARCH_PATH/deploy/parhip_interface.h" ]
+if [ -f $KAHIP_INCLUDE_DIR/parhip_interface.h ] &&
+   [ -f $KAHIP_LIB_DIR/libparhip_interface.so ]
 then
-    echo "    using KAHIP_ARCH_PATH=$KAHIP_ARCH_PATH"
+    echo "    using KAHIP_LIB_DIR=$KAHIP_LIB_DIR"
     wmake $targetType
+    ln -sf $KAHIP_LIB_DIR/lib* $FOAM_SITE_LIBBIN/
 else
-    echo "    skipping kahip decomposer:" \
-         "ParHIP not found under KAHIP_ARCH_PATH=$KAHIP_ARCH_PATH"
+    echo "    skipping kahip decomposer: ParHIP not found under" \
+         "        KAHIP_INCLUDE_DIR=$KAHIP_INCLUDE_DIR" \
+         "        KAHIP_LIB_DIR=$KAHIP_LIB_DIR"
 fi
 
 #------------------------------------------------------------------------------
