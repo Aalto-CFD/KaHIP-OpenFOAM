@@ -1,4 +1,4 @@
-![OpenFOAM v14](https://img.shields.io/badge/OpenFOAM-14-brightgreen)
+![OpenFOAM v15](https://img.shields.io/badge/OpenFOAM-15-brightgreen)
 # KaHIP-OpenFOAM
 The [KaHIP](https://github.com/KaHIP/KaHIP) distributor wrapper for [OpenFOAM](https://github.com/OpenFOAM/OpenFOAM-dev).
 

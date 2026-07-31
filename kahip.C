@@ -127,8 +127,7 @@ Foam::label Foam::decompositionMethods::kahip::decompose
     }
 
     // Are vertex weights in use on any processor? (collective)
-    const bool useWeights =
-        returnReduce(cellWeights.size(), sumOp<label>()) > 0;
+    const bool useWeights = returnReduce(cellWeights.size(), sumOp()) > 0;
 
     // Cell weights on the graph vertices; multiple weights per cell are
     // combined by summation as ParHIP supports a single weight only
@@ -145,7 +144,7 @@ Foam::label Foam::decompositionMethods::kahip::decompose
                 << exit(FatalError);
         }
 
-        const label nGlobalWeights = returnReduce(nWeights, maxOp<label>());
+        const label nGlobalWeights = returnReduce(nWeights, maxOp());
 
         if (nCells && nWeights != nGlobalWeights)
         {
@@ -283,7 +282,7 @@ Foam::label Foam::decompositionMethods::kahip::decompose
         nProcCells[decomp[i]]++;
     }
 
-    reduce(nProcCells, ListOp<sumOp<label>>());
+    reduce(nProcCells, ListOp<sumOp>());
 
     // If there are no cells allocated to this processor keep the first one
     // to ensure that all processors have at least one cell
